@@ -1,0 +1,17 @@
+{
+  "name": "predictive-maintenance-backend",
+  "version": "1.0.0",
+  "description": "Backend for AI Predictive Maintenance System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^8.0.3",
+    "cors": "^2.8.5",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1"
+  }
+}
