@@ -102,13 +102,22 @@ function SingleChart({ config, history }) {
   }, [history, config])
 
   const latestValue = history[history.length - 1]?.[config.key]
+  const trendWindow = history.slice(-6).map(d => d[config.key]).filter(v => v != null)
+  const trendDelta = trendWindow.length >= 2
+    ? trendWindow[trendWindow.length - 1] - trendWindow[0]
+    : 0
+  const trendDir = trendDelta > 0.05 ? 'up' : trendDelta < -0.05 ? 'down' : 'flat'
+  const trendColor = trendDir === 'up' ? 'var(--accent-orange)' : trendDir === 'down' ? 'var(--accent-green)' : 'var(--text-muted)'
 
   return (
-    <div className="glass-card metric-card p-4" style={{ minHeight: 230 }}>
-      <div className="flex items-center gap-2 mb-3">
+    <div className="glass-card metric-card chart-card p-4" style={{ minHeight: 230 }}>
+      <div className="flex items-center gap-2 mb-3 chart-header">
         <span className="w-3 h-0.5 rounded-full" style={{ background: config.borderColor }} />
         <span className="text-xs uppercase tracking-[0.09em]" style={{ color: 'var(--text-secondary)' }}>
           {config.label}
+        </span>
+        <span className="text-[11px]" style={{ color: trendColor }}>
+          {trendDir === 'up' ? '▲' : trendDir === 'down' ? '▼' : '■'}
         </span>
         <span className="data-chip ml-auto font-mono" style={{ borderColor: 'rgba(255,255,255,0.14)' }}>
           Latest: {latestValue != null ? Number(latestValue).toFixed(config.key === 'current' ? 2 : 1) : '--'}
@@ -125,12 +134,12 @@ function SingleChart({ config, history }) {
   )
 }
 
-export default function Charts({ history }) {
-  if (!history || history.length === 0) {
+export default function Charts({ history, isLive }) {
+  if (!history || history.length === 0 || !isLive) {
     return (
       <div className="glass-card p-8 text-center">
         <div className="spinner mx-auto mb-3" />
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Waiting for sensor data...</p>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Waiting for live sensor data...</p>
       </div>
     )
   }

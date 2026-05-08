@@ -64,11 +64,11 @@ function getStateLabel(value, thresholds) {
   return 'Stable'
 }
 
-export default function SensorCards({ data, status }) {
+export default function SensorCards({ data, status, isLive }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-5">
       {sensors.map((sensor, i) => {
-        const value = data?.[sensor.key]
+        const value = isLive ? data?.[sensor.key] : null
         const valColor = getValueColor(value, sensor.thresholds)
         const barW = getBarWidth(sensor.key, value)
         const stateLabel = getStateLabel(value, sensor.thresholds)
@@ -83,7 +83,7 @@ export default function SensorCards({ data, status }) {
             transition={{ delay: i * 0.1, duration: 0.4 }}
           >
             {/* Header */}
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 metric-header">
               <div className="flex items-center gap-2.5">
                 <span className="text-xl">{sensor.icon}</span>
                 <span className="text-xs uppercase tracking-[0.1em]" style={{ color: 'var(--text-secondary)' }}>
@@ -100,7 +100,7 @@ export default function SensorCards({ data, status }) {
             </div>
 
             {/* Value */}
-            <div className="flex items-baseline gap-1.5 mb-3">
+            <div className="flex items-baseline gap-1.5 mb-3 metric-value">
               <motion.span
                 key={value}
                 className="sensor-value text-3xl md:text-4xl leading-none font-semibold"
@@ -130,12 +130,12 @@ export default function SensorCards({ data, status }) {
               />
             </div>
 
-            <div className="mt-3 flex items-center justify-between text-[11px]">
+            <div className="mt-3 flex items-center justify-between text-[11px] metric-footer">
               <span className="data-chip" style={{ borderColor: 'rgba(255,255,255,0.16)' }}>
                 {stateLabel}
               </span>
               <span style={{ color: 'var(--text-muted)' }}>
-                {status === 'danger' ? 'Motor stop active' : 'Live reading'}
+                {!isLive ? 'No signal' : status === 'danger' ? 'Motor stop active' : 'Live reading'}
               </span>
             </div>
           </motion.div>

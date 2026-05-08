@@ -15,6 +15,186 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/predictive_maintenance';
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5001';
 
+const HISTORY_LIMIT = 80;
+const SENSOR_THRESHOLDS = {
+  temperature: { warn: 40, danger: 50, slopeWarnPerMin: 1.5 },
+  vibration: { warn: 1, danger: 1, slopeWarnPerMin: 0 },
+  sound: { warn: 1500, danger: 2000, slopeWarnPerMin: 160 },
+  current: { warn: 2.0, danger: 3.0, slopeWarnPerMin: 0.25 }
+};
+const SENSOR_WEIGHTS = {
+  temperature: 0.3,
+  vibration: 0.15,
+  sound: 0.25,
+  current: 0.3
+};
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function levelScore(value, warn, danger) {
+  if (!Number.isFinite(value)) return 0;
+  if (value < warn) {
+    return clamp((value / warn) * 0.4, 0, 0.4);
+  }
+  if (value < danger) {
+    return 0.4 + clamp((value - warn) / (danger - warn), 0, 1) * 0.3;
+  }
+  return 0.7 + clamp((value - danger) / Math.max(danger, 1), 0, 1) * 0.3;
+}
+
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function slopePerMinute(values, timestamps) {
+  if (values.length < 2) return 0;
+  const first = values[0];
+  const last = values[values.length - 1];
+  const start = timestamps[0];
+  const end = timestamps[timestamps.length - 1];
+  let minutes = (end - start) / 60000;
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    minutes = (values.length - 1) * 3 / 60;
+  }
+  if (minutes <= 0) return 0;
+  return (last - first) / minutes;
+}
+
+function trendDirection(slope, threshold) {
+  if (slope > threshold) return 'RISING';
+  if (slope < -threshold) return 'FALLING';
+  return 'STABLE';
+}
+
+function buildAnalysis(history, aiPrediction, aiConfidence) {
+  const timestamps = history.map(d => new Date(d.timestamp).getTime());
+  const metrics = {};
+  const alerts = [];
+  let weightedRisk = 0;
+  let weightedTrend = 0;
+  let weightedAnomaly = 0;
+  let weightedSlope = 0;
+
+  Object.keys(SENSOR_THRESHOLDS).forEach((key) => {
+    const values = history.map(d => d[key]).filter(v => Number.isFinite(v));
+    const recent = values.slice(-10);
+    const long = values.slice(-50);
+    const latestValue = values[values.length - 1] ?? null;
+    const avgShort = average(recent);
+    const avgLong = average(long);
+    const slope = slopePerMinute(values, timestamps);
+    const level = levelScore(latestValue, SENSOR_THRESHOLDS[key].warn, SENSOR_THRESHOLDS[key].danger);
+    const deviation = avgLong > 0 ? Math.abs(latestValue - avgLong) / avgLong : 0;
+    const anomaly = clamp(deviation, 0, 1);
+    const slopeWarn = SENSOR_THRESHOLDS[key].slopeWarnPerMin;
+    const slopeRatio = slopeWarn > 0 ? slope / slopeWarn : latestValue === 1 ? 1 : 0;
+    const trendScore = slopeWarn > 0
+      ? clamp(slopeRatio, 0, 1)
+      : latestValue === 1 ? 1 : 0;
+
+    metrics[key] = {
+      latest: latestValue,
+      avgShort: Number.isFinite(avgShort) ? Number(avgShort.toFixed(2)) : 0,
+      avgLong: Number.isFinite(avgLong) ? Number(avgLong.toFixed(2)) : 0,
+      slopePerMin: Number.isFinite(slope) ? Number(slope.toFixed(2)) : 0,
+      level: Number(level.toFixed(3)),
+      trend: trendDirection(slope, SENSOR_THRESHOLDS[key].slopeWarnPerMin * 0.35),
+      anomaly: Number(anomaly.toFixed(3))
+    };
+
+    weightedRisk += level * SENSOR_WEIGHTS[key];
+    weightedTrend += trendScore * SENSOR_WEIGHTS[key];
+    weightedAnomaly += anomaly * SENSOR_WEIGHTS[key];
+    if (Number.isFinite(slopeRatio)) {
+      weightedSlope += slopeRatio * SENSOR_WEIGHTS[key];
+    }
+
+    if (trendScore > 0.55 && level > 0.25) {
+      alerts.push(`${key} trend increasing`);
+    }
+  });
+
+  const riskScore = clamp((weightedRisk * 0.6) + (weightedTrend * 0.25) + (weightedAnomaly * 0.15), 0, 1);
+  const trendStrength = clamp(weightedTrend * 1.1, 0, 1);
+  const slopeStrength = clamp(weightedSlope, -1, 1);
+  const historyConfidence = clamp(history.length / 20, 0, 1);
+  const trendConfidence = clamp(trendStrength * historyConfidence, 0, 1);
+  const modelConfidence = Number.isFinite(aiConfidence) ? aiConfidence : 0;
+  const confidence = clamp((modelConfidence * 0.6) + (trendConfidence * 0.4), 0, 1);
+
+  let status = 'NORMAL';
+  if (riskScore >= 0.85 || (aiPrediction === 1 && modelConfidence >= 0.85)) {
+    status = 'CRITICAL_FAILURE';
+  } else if ((riskScore >= 0.65 || aiPrediction === 1) && slopeStrength > 0.12) {
+    status = 'FAILURE_LIKELY';
+  } else if (riskScore >= 0.4 && slopeStrength > 0.08) {
+    status = 'WARNING';
+  } else if (slopeStrength < -0.18 && riskScore < 0.55) {
+    status = 'RECOVERING';
+  } else if (Math.abs(slopeStrength) < 0.08 && riskScore < 0.35) {
+    status = 'STABILIZING';
+  }
+
+  if (status === 'WARNING') alerts.unshift('Early warning: trends degrading');
+  if (status === 'FAILURE_LIKELY') alerts.unshift('Failure likely soon');
+  if (status === 'CRITICAL_FAILURE') alerts.unshift('Critical failure predicted');
+  if (status === 'RECOVERING') alerts.unshift('System recovering - trend decreasing');
+  if (status === 'STABILIZING') alerts.unshift('System stabilizing - trend steady');
+
+  let failureEtaMinutes = null;
+  let failureEtaLabel = 'Monitoring trend';
+  if (status === 'FAILURE_LIKELY' || status === 'CRITICAL_FAILURE') {
+    const etaCandidates = [];
+    Object.keys(SENSOR_THRESHOLDS).forEach((key) => {
+      const slope = metrics[key].slopePerMin;
+      const latestValue = metrics[key].latest;
+      if (!Number.isFinite(slope) || slope <= 0) return;
+      const danger = SENSOR_THRESHOLDS[key].danger;
+      if (!Number.isFinite(latestValue) || latestValue >= danger) return;
+      const minutes = (danger - latestValue) / slope;
+      if (Number.isFinite(minutes) && minutes > 0 && minutes < 240) {
+        etaCandidates.push(minutes);
+      }
+    });
+    failureEtaMinutes = etaCandidates.length ? Math.round(Math.min(...etaCandidates)) : null;
+    failureEtaLabel = failureEtaMinutes
+      ? `Failure likely within ${failureEtaMinutes} min`
+      : 'Failure risk elevated';
+  } else if (status === 'RECOVERING') {
+    failureEtaLabel = 'System recovering';
+  } else if (status === 'STABILIZING' || status === 'NORMAL') {
+    failureEtaLabel = 'System stable';
+  }
+
+  const healthScore = Math.round(100 - (riskScore * 100));
+  const riskProbability = Math.round(riskScore * 100);
+  const overallTrend = slopeStrength > 0.2
+    ? 'RISING'
+    : slopeStrength < -0.2
+      ? 'FALLING'
+      : Math.abs(slopeStrength) < 0.08
+        ? 'STABLE'
+        : 'MODERATE';
+
+  return {
+    status,
+    confidence: Number(confidence.toFixed(3)),
+    riskScore: Number(riskScore.toFixed(3)),
+    riskProbability,
+    healthScore,
+    failureEtaMinutes,
+    failureEtaLabel,
+    trendSummary: overallTrend,
+    anomalyScore: Number(weightedAnomaly.toFixed(3)),
+    metrics,
+    alerts,
+    historyWindow: history.length
+  };
+}
+
 // ===== Middleware =====
 app.use(cors({
   origin: '*',
@@ -40,6 +220,20 @@ const sensorDataSchema = new mongoose.Schema({
   prediction:  { type: Number, default: null },   // 0 = normal, 1 = failure
   confidence:  { type: Number, default: null },
   label:       { type: String, default: null },
+  analysis: {
+    status: { type: String, default: null },
+    confidence: { type: Number, default: null },
+    riskScore: { type: Number, default: null },
+    riskProbability: { type: Number, default: null },
+    healthScore: { type: Number, default: null },
+    failureEtaMinutes: { type: Number, default: null },
+    failureEtaLabel: { type: String, default: null },
+    trendSummary: { type: String, default: null },
+    anomalyScore: { type: Number, default: null },
+    metrics: { type: Object, default: null },
+    alerts: { type: [String], default: [] },
+    historyWindow: { type: Number, default: 0 }
+  },
   timestamp:   { type: Date, default: Date.now }
 });
 
@@ -89,10 +283,27 @@ app.post('/api/data', async (req, res) => {
       console.log('[AI] Continuing without prediction...');
     }
 
+    const now = new Date();
+    const recent = await SensorData.find()
+      .sort({ timestamp: -1 })
+      .limit(HISTORY_LIMIT - 1)
+      .lean();
+    const history = [...recent.reverse(), {
+      temperature,
+      vibration,
+      sound,
+      current,
+      timestamp: now
+    }];
+
+    const analysis = buildAnalysis(history, prediction, confidence);
+
     // Store in MongoDB
     const sensorEntry = new SensorData({
       temperature, vibration, sound, current,
-      prediction, confidence, label
+      prediction, confidence, label,
+      analysis,
+      timestamp: now
     });
     await sensorEntry.save();
     console.log(`[DB] Data saved (id: ${sensorEntry._id})`);
@@ -103,6 +314,7 @@ app.post('/api/data', async (req, res) => {
       prediction: prediction,
       confidence: confidence,
       label: label,
+      analysis,
       id: sensorEntry._id
     });
 
@@ -167,6 +379,8 @@ app.get('/api/stats', async (req, res) => {
         sound: parseInt(avgSound),
         current: parseFloat(avgCurrent.toFixed(2))
       },
+      healthScore: latest?.analysis?.healthScore ?? null,
+      riskProbability: latest?.analysis?.riskProbability ?? null,
       latest
     });
   } catch (err) {

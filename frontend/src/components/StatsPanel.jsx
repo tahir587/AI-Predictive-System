@@ -17,6 +17,18 @@ export default function StatsPanel({ stats }) {
 
   const items = [
     {
+      label: 'Health Score',
+      value: stats.healthScore != null ? `${stats.healthScore}%` : '--',
+      icon: '🧠',
+      color: 'var(--accent-green)'
+    },
+    {
+      label: 'Risk Probability',
+      value: stats.riskProbability != null ? `${stats.riskProbability}%` : '--',
+      icon: '⚠️',
+      color: 'var(--accent-orange)'
+    },
+    {
       label: 'Total Readings',
       value: stats.totalReadings?.toLocaleString() || '0',
       icon: '📡',
@@ -64,7 +76,7 @@ export default function StatsPanel({ stats }) {
         {items.map((item, i) => (
           <motion.div
             key={item.label}
-            className="metric-card rounded-2xl p-3.5"
+            className="metric-card rounded-2xl p-3.5 stats-card"
             style={{
               borderColor: 'rgba(255,255,255,0.09)'
             }}

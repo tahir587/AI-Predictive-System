@@ -8,7 +8,7 @@ export default function Header({ connected }) {
         {/* Logo */}
         <div className="flex items-center gap-3">
           <motion.div
-            className="w-11 h-11 rounded-2xl flex items-center justify-center text-lg font-bold"
+            className="w-11 h-11 rounded-2xl flex items-center justify-center text-lg font-bold logo-orb"
             style={{
               background: 'linear-gradient(135deg, var(--accent-cyan), var(--accent-orange))',
               boxShadow: '0 0 20px rgba(34, 199, 216, 0.35)'
@@ -41,7 +41,7 @@ export default function Header({ connected }) {
           </div>
 
           <motion.div
-            className="status-pill flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+            className="status-pill flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium status-pill-strong"
             style={{
               background: connected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
               border: `1px solid ${connected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,

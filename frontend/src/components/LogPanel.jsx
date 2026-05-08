@@ -29,7 +29,7 @@ export default function LogPanel({ logs }) {
             return (
               <motion.div
                 key={log.id}
-                className="flex items-start gap-2.5 py-2 px-2.5 rounded-xl text-xs border"
+                className="flex items-start gap-2.5 py-2 px-2.5 rounded-xl text-xs border log-row"
                 style={{
                   background: 'rgba(255,255,255,0.018)',
                   borderColor: 'rgba(255,255,255,0.08)'

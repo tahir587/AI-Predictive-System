@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import axios from 'axios'
 import Header from './components/Header.jsx'
@@ -8,6 +8,7 @@ import Scene3D from './components/Scene3D.jsx'
 import Charts from './components/Charts.jsx'
 import LogPanel from './components/LogPanel.jsx'
 import StatsPanel from './components/StatsPanel.jsx'
+import AIPredictionPanel from './components/AIPredictionPanel.jsx'
 
 // Use relative path for API calls (proxied through dev server)
 const API_BASE = ''
@@ -33,6 +34,8 @@ function App() {
   const [connected, setConnected] = useState(false)
   const [logs, setLogs] = useState([])
   const [error, setError] = useState(null)
+  const lastAiStatusRef = useRef(null)
+  const lastAlertsRef = useRef('')
 
   const addLog = useCallback((message, type = 'info') => {
     const entry = {
@@ -95,19 +98,45 @@ function App() {
   }, [fetchLatest, fetchHistory, fetchStats, addLog])
 
   useEffect(() => {
-    if (sensorData) {
-      const pred = sensorData.prediction
-      if (pred === 1) {
-        addLog(`⚠️ FAILURE PREDICTED - Confidence: ${((sensorData.confidence || 0) * 100).toFixed(0)}%`, 'danger')
-      } else if (pred === 0) {
-        addLog(`✅ System Normal - T:${sensorData.temperature}°C`, 'success')
+    if (!sensorData?.analysis) return
+    const analysis = sensorData.analysis
+    if (analysis.status && lastAiStatusRef.current !== analysis.status) {
+      lastAiStatusRef.current = analysis.status
+      const statusLabel = analysis.status.replace('_', ' ')
+      const confidence = analysis.confidence != null ? Math.round(analysis.confidence * 100) : null
+      const logMessage = confidence != null
+        ? `AI Status: ${statusLabel} (${confidence}% confidence)`
+        : `AI Status: ${statusLabel}`
+      const logType = analysis.status === 'CRITICAL_FAILURE'
+        ? 'danger'
+        : analysis.status === 'FAILURE_LIKELY'
+          ? 'warning'
+          : analysis.status === 'RECOVERING'
+            ? 'success'
+            : analysis.status === 'STABILIZING'
+              ? 'info'
+              : 'info'
+      addLog(logMessage, logType)
+    }
+
+    if (Array.isArray(analysis.alerts) && analysis.alerts.length) {
+      const alertSignature = analysis.alerts.join('|')
+      if (alertSignature !== lastAlertsRef.current) {
+        lastAlertsRef.current = alertSignature
+        analysis.alerts.forEach(alert => addLog(`AI Insight: ${alert}`, 'warning'))
       }
     }
-  }, [sensorData?.timestamp])
+  }, [sensorData?.analysis, addLog])
 
   const isLive = isLiveReading(sensorData)
+  const analysisStatus = sensorData?.analysis?.status
   const systemStatus = !isLive ? 'offline'
-    : sensorData.prediction === 1 ? 'danger'
+    : analysisStatus === 'CRITICAL_FAILURE' ? 'critical'
+    : analysisStatus === 'FAILURE_LIKELY' ? 'danger'
+    : analysisStatus === 'WARNING' ? 'warning'
+    : analysisStatus === 'RECOVERING' ? 'recovering'
+    : analysisStatus === 'STABILIZING' ? 'stabilizing'
+    : analysisStatus === 'NORMAL' ? 'normal'
     : sensorData.temperature > 45 || sensorData.current > 2.5 ? 'warning'
     : 'normal'
 
@@ -116,7 +145,11 @@ function App() {
       <Header connected={connected} />
 
       <main className="relative max-w-[1650px] mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8 space-y-6 md:space-y-7">
-        <StatusBanner status={systemStatus} data={sensorData} />
+        <div className="space-y-8 top-stack">
+          <StatusBanner status={systemStatus} data={sensorData} />
+          <div className="section-separator" />
+          <AIPredictionPanel analysis={sensorData?.analysis} isLive={isLive} />
+        </div>
 
         {/* Top Row: 3D + Sensor Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -134,7 +167,7 @@ function App() {
 
           {/* Sensor Cards */}
           <div className="lg:col-span-2">
-            <SensorCards data={sensorData} status={systemStatus} />
+            <SensorCards data={sensorData} status={systemStatus} isLive={isLive} />
           </div>
         </div>
 
@@ -144,7 +177,7 @@ function App() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.5 }}
         >
-          <Charts history={history} />
+          <Charts history={history} isLive={isLive} />
         </motion.div>
 
         {/* Bottom Row: Stats + Logs */}

@@ -18,13 +18,37 @@ const statusConfig = {
     border: 'rgba(245, 158, 11, 0.25)',
     icon: '⚠️'
   },
+  recovering: {
+    label: 'System Recovering',
+    sub: 'Trend is improving — risk decreasing',
+    color: 'var(--accent-blue)',
+    bg: 'rgba(62, 165, 255, 0.1)',
+    border: 'rgba(62, 165, 255, 0.3)',
+    icon: '💧'
+  },
+  stabilizing: {
+    label: 'System Stable',
+    sub: 'Trends are steady with low risk',
+    color: 'var(--accent-cyan)',
+    bg: 'rgba(34, 199, 216, 0.1)',
+    border: 'rgba(34, 199, 216, 0.3)',
+    icon: '🧊'
+  },
   danger: {
-    label: 'Failure Predicted',
-    sub: 'AI model predicts maintenance required — motor stopped',
+    label: 'Failure Likely',
+    sub: 'AI model predicts maintenance required soon',
     color: 'var(--accent-red)',
     bg: 'rgba(239, 68, 68, 0.08)',
     border: 'rgba(239, 68, 68, 0.25)',
     icon: '🚨'
+  },
+  critical: {
+    label: 'Critical Failure',
+    sub: 'Immediate action required — system at high risk',
+    color: 'var(--accent-red)',
+    bg: 'rgba(239, 68, 68, 0.14)',
+    border: 'rgba(239, 68, 68, 0.35)',
+    icon: '🛑'
   },
   offline: {
     label: 'Waiting for Data',
@@ -66,10 +90,20 @@ export default function StatusBanner({ status, data }) {
         </div>
 
         {data && (
-          <div className="flex flex-wrap items-center gap-2 text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>
-            {data.confidence != null && (
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono status-chips" style={{ color: 'var(--text-secondary)' }}>
+            {data.analysis?.riskProbability != null && (
               <span className="data-chip">
-                AI Confidence: <span style={{ color: cfg.color }}>{(data.confidence * 100).toFixed(0)}%</span>
+                Risk: <span style={{ color: cfg.color }}>{data.analysis.riskProbability}%</span>
+              </span>
+            )}
+            {data.analysis?.healthScore != null && (
+              <span className="data-chip">
+                Health: <span style={{ color: cfg.color }}>{data.analysis.healthScore}%</span>
+              </span>
+            )}
+            {data.analysis?.confidence != null && (
+              <span className="data-chip">
+                AI Confidence: <span style={{ color: cfg.color }}>{(data.analysis.confidence * 100).toFixed(0)}%</span>
               </span>
             )}
             <span className="data-chip">
