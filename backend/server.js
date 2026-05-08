@@ -14,6 +14,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/predictive_maintenance';
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5001';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 
 const HISTORY_LIMIT = 80;
 const SENSOR_THRESHOLDS = {
@@ -21,6 +23,12 @@ const SENSOR_THRESHOLDS = {
   vibration: { warn: 1, danger: 1, slopeWarnPerMin: 0 },
   sound: { warn: 1500, danger: 2000, slopeWarnPerMin: 160 },
   current: { warn: 2.0, danger: 3.0, slopeWarnPerMin: 0.25 }
+};
+const EMERGENCY_THRESHOLDS = {
+  temperature: 60,
+  vibration: 1,
+  sound: 2600,
+  current: 3.5
 };
 const SENSOR_WEIGHTS = {
   temperature: 0.3,
@@ -69,10 +77,11 @@ function trendDirection(slope, threshold) {
   return 'STABLE';
 }
 
-function buildAnalysis(history, aiPrediction, aiConfidence) {
+function buildAnalysis(history, aiPrediction, aiConfidence, aiFailureProbability) {
   const timestamps = history.map(d => new Date(d.timestamp).getTime());
   const metrics = {};
   const alerts = [];
+  const driverScores = [];
   let weightedRisk = 0;
   let weightedTrend = 0;
   let weightedAnomaly = 0;
@@ -105,6 +114,9 @@ function buildAnalysis(history, aiPrediction, aiConfidence) {
       anomaly: Number(anomaly.toFixed(3))
     };
 
+    const driverScore = (level * 0.6) + (anomaly * 0.2) + (trendScore * 0.2);
+    driverScores.push({ key, score: driverScore });
+
     weightedRisk += level * SENSOR_WEIGHTS[key];
     weightedTrend += trendScore * SENSOR_WEIGHTS[key];
     weightedAnomaly += anomaly * SENSOR_WEIGHTS[key];
@@ -117,7 +129,14 @@ function buildAnalysis(history, aiPrediction, aiConfidence) {
     }
   });
 
-  const riskScore = clamp((weightedRisk * 0.6) + (weightedTrend * 0.25) + (weightedAnomaly * 0.15), 0, 1);
+  const modelRisk = Number.isFinite(aiFailureProbability)
+    ? aiFailureProbability
+    : (aiPrediction === 1 ? aiConfidence : 0);
+  const riskScore = clamp(
+    (weightedRisk * 0.5) + (weightedTrend * 0.2) + (weightedAnomaly * 0.1) + (modelRisk * 0.2),
+    0,
+    1
+  );
   const trendStrength = clamp(weightedTrend * 1.1, 0, 1);
   const slopeStrength = clamp(weightedSlope, -1, 1);
   const historyConfidence = clamp(history.length / 20, 0, 1);
@@ -179,9 +198,21 @@ function buildAnalysis(history, aiPrediction, aiConfidence) {
         ? 'STABLE'
         : 'MODERATE';
 
+  driverScores.sort((a, b) => b.score - a.score);
+  const topDrivers = driverScores.slice(0, 2).map(item => item.key);
+  const reasoning = [
+    `Top drivers: ${topDrivers.length ? topDrivers.join(' + ') : 'stable baseline'}`,
+    `Trend is ${overallTrend.toLowerCase()} with slope strength ${slopeStrength.toFixed(2)}`,
+    `Model failure probability ${Math.round(modelRisk * 100)}%`
+  ];
+  if (failureEtaMinutes) {
+    reasoning.push(`Estimated RUL ${failureEtaMinutes} minutes`);
+  }
+
   return {
     status,
     confidence: Number(confidence.toFixed(3)),
+    aiFailureProbability: Number.isFinite(modelRisk) ? Number(modelRisk.toFixed(3)) : null,
     riskScore: Number(riskScore.toFixed(3)),
     riskProbability,
     healthScore,
@@ -191,9 +222,65 @@ function buildAnalysis(history, aiPrediction, aiConfidence) {
     anomalyScore: Number(weightedAnomaly.toFixed(3)),
     metrics,
     alerts,
+    reasoning,
     historyWindow: history.length
   };
 }
+
+function isEmergencyReading({ temperature, vibration, sound, current }) {
+  const reasons = [];
+  if (Number.isFinite(temperature) && temperature >= EMERGENCY_THRESHOLDS.temperature) {
+    reasons.push('Temperature critical');
+  }
+  if (Number.isFinite(current) && current >= EMERGENCY_THRESHOLDS.current) {
+    reasons.push('Current overload');
+  }
+  if (Number.isFinite(sound) && sound >= EMERGENCY_THRESHOLDS.sound) {
+    reasons.push('Sound anomaly spike');
+  }
+  if (Number.isFinite(vibration) && vibration >= EMERGENCY_THRESHOLDS.vibration) {
+    reasons.push('Severe vibration detected');
+  }
+  return { active: reasons.length > 0, reasons };
+}
+
+function shouldSendAlert(key, cooldownMs = 60000) {
+  if (!key) return false;
+  const now = Date.now();
+  if (key !== lastAlertKey || now - lastAlertAt > cooldownMs) {
+    lastAlertKey = key;
+    lastAlertAt = now;
+    return true;
+  }
+  return false;
+}
+
+async function sendTelegramAlert(message) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log('[ALERT] Telegram config missing, skipping alert');
+    return;
+  }
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await axios.post(url, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: message
+    }, { timeout: 5000 });
+  } catch (err) {
+    console.error(`[ALERT] Telegram error: ${err.message}`);
+  }
+}
+
+let lastAction = {
+  action: 'CONTINUE',
+  state: 'NORMAL',
+  message: 'Monitoring',
+  emergency: false,
+  updatedAt: Date.now()
+};
+let lastAlertKey = '';
+let lastAlertAt = 0;
 
 // ===== Middleware =====
 app.use(cors({
@@ -223,6 +310,7 @@ const sensorDataSchema = new mongoose.Schema({
   analysis: {
     status: { type: String, default: null },
     confidence: { type: Number, default: null },
+    aiFailureProbability: { type: Number, default: null },
     riskScore: { type: Number, default: null },
     riskProbability: { type: Number, default: null },
     healthScore: { type: Number, default: null },
@@ -232,6 +320,12 @@ const sensorDataSchema = new mongoose.Schema({
     anomalyScore: { type: Number, default: null },
     metrics: { type: Object, default: null },
     alerts: { type: [String], default: [] },
+    reasoning: { type: [String], default: [] },
+    emergency: {
+      active: { type: Boolean, default: false },
+      reasons: { type: [String], default: [] }
+    },
+    action: { type: String, default: 'CONTINUE' },
     historyWindow: { type: Number, default: 0 }
   },
   timestamp:   { type: Date, default: Date.now }
@@ -268,6 +362,7 @@ app.post('/api/data', async (req, res) => {
     let prediction = null;
     let confidence = null;
     let label = null;
+    let failureProbability = null;
 
     try {
       const aiResponse = await axios.post(`${AI_SERVICE_URL}/predict`, {
@@ -277,6 +372,7 @@ app.post('/api/data', async (req, res) => {
       prediction = aiResponse.data.prediction;
       confidence = aiResponse.data.confidence;
       label = aiResponse.data.label;
+      failureProbability = aiResponse.data.failure_probability;
       console.log(`[AI] Prediction: ${label} (confidence: ${(confidence * 100).toFixed(1)}%)`);
     } catch (aiErr) {
       console.error(`[AI] Service error: ${aiErr.message}`);
@@ -296,7 +392,25 @@ app.post('/api/data', async (req, res) => {
       timestamp: now
     }];
 
-    const analysis = buildAnalysis(history, prediction, confidence);
+    const analysis = buildAnalysis(history, prediction, confidence, failureProbability);
+    const emergencyCheck = isEmergencyReading({ temperature, vibration, sound, current });
+    const requestEmergency = req.body?.emergency === true;
+    const emergencyReasons = [
+      ...emergencyCheck.reasons,
+      ...(Array.isArray(req.body?.emergencyReasons) ? req.body.emergencyReasons : [])
+    ];
+    const isEmergency = emergencyCheck.active || requestEmergency;
+
+    if (isEmergency) {
+      analysis.status = 'CRITICAL_FAILURE';
+      analysis.failureEtaLabel = 'Emergency shutdown triggered';
+    }
+
+    analysis.emergency = {
+      active: isEmergency,
+      reasons: emergencyReasons
+    };
+    analysis.action = isEmergency ? 'STOP_MOTOR' : 'CONTINUE';
 
     // Store in MongoDB
     const sensorEntry = new SensorData({
@@ -308,6 +422,26 @@ app.post('/api/data', async (req, res) => {
     await sensorEntry.save();
     console.log(`[DB] Data saved (id: ${sensorEntry._id})`);
 
+    const actionMessage = isEmergency
+      ? 'Critical motor failure detected! Motor stopped automatically.'
+      : analysis.failureEtaLabel;
+
+    lastAction = {
+      action: analysis.action,
+      state: analysis.status,
+      message: actionMessage,
+      emergency: isEmergency,
+      updatedAt: Date.now()
+    };
+
+    if (isEmergency && shouldSendAlert('EMERGENCY')) {
+      await sendTelegramAlert(`🚨 Critical motor failure detected! Motor stopped automatically. Reasons: ${emergencyReasons.join(', ') || 'Sensor spike'}`);
+    } else if (analysis.status === 'FAILURE_LIKELY' && shouldSendAlert('FAILURE_LIKELY')) {
+      await sendTelegramAlert(`⚠️ Failure likely within ${analysis.failureEtaMinutes ?? 'N/A'} minutes. ${analysis.failureEtaLabel}`);
+    } else if (analysis.status === 'WARNING' && shouldSendAlert('WARNING')) {
+      await sendTelegramAlert(`⚠️ Early warning: system trends degrading. ${analysis.failureEtaLabel}`);
+    }
+
     // Return response to ESP32
     res.json({
       status: 'ok',
@@ -315,6 +449,7 @@ app.post('/api/data', async (req, res) => {
       confidence: confidence,
       label: label,
       analysis,
+      action: analysis.action,
       id: sensorEntry._id
     });
 
@@ -386,6 +521,11 @@ app.get('/api/stats', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /api/action - Return latest action for ESP32
+app.get('/api/action', (req, res) => {
+  res.json(lastAction);
 });
 
 // Health check

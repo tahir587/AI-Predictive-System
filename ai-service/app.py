@@ -146,13 +146,18 @@ def predict():
             float(data['current'])
         ]])
         
+        proba = model.predict_proba(features)[0]
         prediction = model.predict(features)[0]
-        confidence = float(model.predict_proba(features)[0][prediction])
+        confidence = float(proba[prediction])
+        failure_probability = float(proba[1])
+        normal_probability = float(proba[0])
         
         result = {
             'prediction': int(prediction),
             'confidence': round(confidence, 4),
             'label': 'Failure Predicted' if prediction == 1 else 'Normal',
+            'failure_probability': round(failure_probability, 4),
+            'normal_probability': round(normal_probability, 4),
             'features_received': {
                 'temperature': data['temperature'],
                 'vibration': data['vibration'],

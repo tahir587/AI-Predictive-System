@@ -56,6 +56,13 @@ export default function AIPredictionPanel({ analysis, isLive }) {
   const cfg = statusStyles[statusKey] || statusStyles.NORMAL
   const statusClass = statusKey.toLowerCase().replace(/_/g, '-')
   const confidence = analysis?.confidence != null ? analysis.confidence * 100 : null
+  const emergencyActive = analysis?.emergency?.active
+  const actionLabel = analysis?.action === 'STOP_MOTOR' ? 'SHUTDOWN' : 'RUNNING'
+  const trendArrow = analysis?.trendSummary === 'RISING'
+    ? '↗'
+    : analysis?.trendSummary === 'FALLING'
+      ? '↘'
+      : '→'
 
   return (
     <motion.div
@@ -83,7 +90,10 @@ export default function AIPredictionPanel({ analysis, isLive }) {
           <span className="data-chip">Health: <strong style={{ color: cfg.color }}>{formatPercent(analysis?.healthScore)}</strong></span>
           <span className="data-chip">Risk: <strong style={{ color: cfg.color }}>{formatPercent(analysis?.riskProbability)}</strong></span>
           <span className="data-chip">Confidence: <strong style={{ color: cfg.color }}>{formatPercent(confidence)}</strong></span>
-          <span className="data-chip">Trend: <strong style={{ color: cfg.color }}>{analysis?.trendSummary || 'STABLE'}</strong></span>
+          <span className="data-chip">Trend: <strong style={{ color: cfg.color }}>{trendArrow} {analysis?.trendSummary || 'STABLE'}</strong></span>
+          <span className={`data-chip ${emergencyActive ? 'chip-critical' : ''}`}>
+            Emergency: <strong style={{ color: emergencyActive ? 'var(--accent-red)' : cfg.color }}>{emergencyActive ? 'ACTIVE' : 'CLEAR'}</strong>
+          </span>
         </div>
       </div>
 
@@ -91,6 +101,18 @@ export default function AIPredictionPanel({ analysis, isLive }) {
         <div className="ai-metric">
           <span className="ai-label">Anomaly Score</span>
           <span className="ai-value">{analysis?.anomalyScore != null ? analysis.anomalyScore.toFixed(2) : '--'}</span>
+        </div>
+        <div className="ai-metric">
+          <span className="ai-label">Remaining Useful Life</span>
+          <span className="ai-value">{analysis?.failureEtaMinutes != null ? `${analysis.failureEtaMinutes} min` : 'Monitoring'}</span>
+        </div>
+        <div className="ai-metric">
+          <span className="ai-label">Action</span>
+          <span className="ai-value">{actionLabel}</span>
+        </div>
+        <div className="ai-metric">
+          <span className="ai-label">Recovery Signal</span>
+          <span className="ai-value">{analysis?.status === 'RECOVERING' ? 'DETECTED' : 'NONE'}</span>
         </div>
         <div className="ai-metric">
           <span className="ai-label">History Window</span>
@@ -102,6 +124,15 @@ export default function AIPredictionPanel({ analysis, isLive }) {
             {analysis?.alerts?.length ? analysis.alerts.slice(0, 2).join(' • ') : 'None detected'}
           </span>
         </div>
+      </div>
+
+      <div className="ai-reasoning mt-5">
+        <p className="ai-reasoning-title">AI Reasoning</p>
+        <ul className="ai-reasoning-list">
+          {(analysis?.reasoning?.length ? analysis.reasoning : ['Awaiting enough history for reasoning']).map((item, idx) => (
+            <li key={`${item}-${idx}`}>{item}</li>
+          ))}
+        </ul>
       </div>
 
       <div className="ai-progress mt-5">

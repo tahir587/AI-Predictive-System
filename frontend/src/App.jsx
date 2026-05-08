@@ -36,6 +36,7 @@ function App() {
   const [error, setError] = useState(null)
   const lastAiStatusRef = useRef(null)
   const lastAlertsRef = useRef('')
+  const lastActionRef = useRef(null)
 
   const addLog = useCallback((message, type = 'info') => {
     const entry = {
@@ -126,11 +127,22 @@ function App() {
         analysis.alerts.forEach(alert => addLog(`AI Insight: ${alert}`, 'warning'))
       }
     }
+
+    if (analysis.action && lastActionRef.current !== analysis.action) {
+      lastActionRef.current = analysis.action
+      if (analysis.action === 'STOP_MOTOR') {
+        addLog('Emergency shutdown activated: motor stopped', 'danger')
+      } else {
+        addLog('System action: motor running', 'info')
+      }
+    }
   }, [sensorData?.analysis, addLog])
 
   const isLive = isLiveReading(sensorData)
   const analysisStatus = sensorData?.analysis?.status
+  const isEmergency = sensorData?.analysis?.emergency?.active
   const systemStatus = !isLive ? 'offline'
+    : isEmergency ? 'critical'
     : analysisStatus === 'CRITICAL_FAILURE' ? 'critical'
     : analysisStatus === 'FAILURE_LIKELY' ? 'danger'
     : analysisStatus === 'WARNING' ? 'warning'
