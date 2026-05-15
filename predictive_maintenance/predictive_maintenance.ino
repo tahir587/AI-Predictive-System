@@ -8,11 +8,11 @@
 // ===== WIFI =====
 const char* ssid = "TT";
 const char* password = "tahir786";
-const char* serverIP = "10.90.254.200";
+const char* serverIP = "192.168.1.13";
 
 // ===== PINS =====
 #define DHT_PIN 4
-#define VIB_PIN 34
+#define VIB_PIN 3
 #define SOUND_PIN 32
 #define CURRENT_PIN 35
 #define RELAY_PIN 26
@@ -21,7 +21,6 @@ const char* serverIP = "10.90.254.200";
 #define LED_GREEN 12
 #define LED_YELLOW 13
 #define LED_RED 14
-
 // ===== RELAY CONFIG =====
 // 🔥 CHANGE THIS AFTER TESTING
 #define RELAY_ACTIVE_LOW true

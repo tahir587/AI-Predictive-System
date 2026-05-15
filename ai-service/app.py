@@ -179,6 +179,17 @@ def health():
     return jsonify({'status': 'ok', 'model': 'RandomForestClassifier'})
 
 
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({
+        'service': 'ai-predictive-maintenance',
+        'status': 'ok',
+        'health': '/health',
+        'predict': '/predict',
+        'retrain': '/retrain'
+    })
+
+
 @app.route('/retrain', methods=['POST'])
 def retrain():
     """Retrain the model."""

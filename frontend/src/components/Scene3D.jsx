@@ -6,12 +6,16 @@ import * as THREE from 'three'
 const statusConfig = {
   normal: { color: '#10b981', label: 'RUNNING', running: true, factor: 1 },
   warning: { color: '#f59e0b', label: 'HIGH LOAD', running: true, factor: 0.82 },
-  danger: { color: '#ef4444', label: 'TRIPPED', running: false, factor: 0 },
+  danger: { color: '#ef4444', label: 'FAILURE LIKELY', running: true, factor: 0.65 },
+  recovering: { color: '#38bdf8', label: 'RECOVERING', running: true, factor: 0.78 },
+  stabilizing: { color: '#22d3ee', label: 'STABILIZING', running: true, factor: 0.9 },
+  critical: { color: '#ef4444', label: 'CRITICAL', running: false, factor: 0 },
   offline: { color: '#64748b', label: 'OFFLINE', running: false, factor: 0 }
 }
 
 function getTelemetry(status, data, isLive) {
-  if (!isLive) {
+  const emergencyStop = data?.analysis?.action === 'STOP_MOTOR' || data?.analysis?.emergency?.active
+  if (!isLive || emergencyStop) {
     return {
       targetRpm: 0,
       vibration: 0,

@@ -127,6 +127,10 @@ function buildAnalysis(history, aiPrediction, aiConfidence, aiFailureProbability
     if (trendScore > 0.55 && level > 0.25) {
       alerts.push(`${key} trend increasing`);
     }
+
+    if (key === 'temperature' && Number.isFinite(latestValue) && latestValue >= 35 && slope > 0) {
+      alerts.push('Temperature rising above 35C');
+    }
   });
 
   const modelRisk = Number.isFinite(aiFailureProbability)
@@ -163,23 +167,66 @@ function buildAnalysis(history, aiPrediction, aiConfidence, aiFailureProbability
   if (status === 'RECOVERING') alerts.unshift('System recovering - trend decreasing');
   if (status === 'STABILIZING') alerts.unshift('System stabilizing - trend steady');
 
-  let failureEtaMinutes = null;
-  let failureEtaLabel = 'Monitoring trend';
-  if (status === 'FAILURE_LIKELY' || status === 'CRITICAL_FAILURE') {
-    const etaCandidates = [];
-    Object.keys(SENSOR_THRESHOLDS).forEach((key) => {
-      const slope = metrics[key].slopePerMin;
-      const latestValue = metrics[key].latest;
-      if (!Number.isFinite(slope) || slope <= 0) return;
-      const danger = SENSOR_THRESHOLDS[key].danger;
-      if (!Number.isFinite(latestValue) || latestValue >= danger) return;
-      const minutes = (danger - latestValue) / slope;
-      if (Number.isFinite(minutes) && minutes > 0 && minutes < 240) {
-        etaCandidates.push(minutes);
+  const etaCandidates = [];
+  Object.keys(SENSOR_THRESHOLDS).forEach((key) => {
+    const slope = metrics[key].slopePerMin;
+    const latestValue = metrics[key].latest;
+    if (!Number.isFinite(slope) || slope <= 0) return;
+    const danger = SENSOR_THRESHOLDS[key].danger;
+    if (!Number.isFinite(latestValue) || latestValue >= danger) return;
+    const minutes = (danger - latestValue) / slope;
+    if (Number.isFinite(minutes) && minutes > 0 && minutes < 240) {
+      etaCandidates.push(minutes);
+    }
+  });
+  let failureEtaMinutes = etaCandidates.length ? Math.round(Math.min(...etaCandidates)) : null;
+  let tempEtaMinutes = null;
+  const tempMetrics = metrics.temperature;
+  if (tempMetrics && Number.isFinite(tempMetrics.latest) && Number.isFinite(tempMetrics.slopePerMin)) {
+    if (tempMetrics.latest >= 32 && tempMetrics.slopePerMin > 0) {
+      const temp = tempMetrics.latest;
+      const slope = tempMetrics.slopePerMin;
+      const dangerTemp = SENSOR_THRESHOLDS.temperature.danger;
+      let range = null;
+
+      if (temp >= 45) {
+        range = { minTemp: 45, maxTemp: dangerTemp, minEta: 5, maxEta: 10 };
+      } else if (temp >= 40) {
+        range = { minTemp: 40, maxTemp: 45, minEta: 10, maxEta: 50 };
+      } else if (temp >= 35) {
+        range = { minTemp: 35, maxTemp: 40, minEta: 50, maxEta: 100 };
+      } else if (temp >= 32) {
+        range = { minTemp: 32, maxTemp: 35, minEta: 100, maxEta: 200 };
       }
-    });
-    failureEtaMinutes = etaCandidates.length ? Math.round(Math.min(...etaCandidates)) : null;
-    failureEtaLabel = failureEtaMinutes
+
+      if (range) {
+        const tempRatio = clamp((temp - range.minTemp) / Math.max(range.maxTemp - range.minTemp, 1), 0, 1);
+        const slopeRatio = clamp(slope / 2, 0, 1);
+        let eta = range.maxEta - ((range.maxEta - range.minEta) * tempRatio);
+        eta -= (range.maxEta - range.minEta) * 0.2 * slopeRatio;
+        tempEtaMinutes = Math.round(clamp(eta, range.minEta, range.maxEta));
+      }
+    }
+  }
+
+  const showTempEtaLabel = Number.isFinite(tempEtaMinutes)
+    && tempEtaMinutes > 0
+    && tempMetrics
+    && Number.isFinite(tempMetrics.latest)
+    && tempMetrics.latest >= 32
+    && Number.isFinite(tempMetrics.slopePerMin)
+    && tempMetrics.slopePerMin > 0;
+
+  if (showTempEtaLabel) {
+    failureEtaMinutes = tempEtaMinutes;
+  }
+
+  let failureEtaLabel = 'Monitoring trend';
+
+  if (showTempEtaLabel) {
+    failureEtaLabel = `Estimated to reach danger in ${tempEtaMinutes} min`;
+  } else if (status === 'FAILURE_LIKELY' || status === 'CRITICAL_FAILURE') {
+    failureEtaLabel = failureEtaMinutes != null
       ? `Failure likely within ${failureEtaMinutes} min`
       : 'Failure risk elevated';
   } else if (status === 'RECOVERING') {
@@ -205,9 +252,6 @@ function buildAnalysis(history, aiPrediction, aiConfidence, aiFailureProbability
     `Trend is ${overallTrend.toLowerCase()} with slope strength ${slopeStrength.toFixed(2)}`,
     `Model failure probability ${Math.round(modelRisk * 100)}%`
   ];
-  if (failureEtaMinutes) {
-    reasoning.push(`Estimated RUL ${failureEtaMinutes} minutes`);
-  }
 
   return {
     status,
@@ -434,10 +478,20 @@ app.post('/api/data', async (req, res) => {
       updatedAt: Date.now()
     };
 
+    const tempMetrics = analysis.metrics?.temperature;
+    const tempRising = tempMetrics
+      && Number.isFinite(tempMetrics.latest)
+      && tempMetrics.latest >= 32
+      && Number.isFinite(tempMetrics.slopePerMin)
+      && tempMetrics.slopePerMin > 0
+      && Number.isFinite(analysis.failureEtaMinutes);
+
     if (isEmergency && shouldSendAlert('EMERGENCY')) {
       await sendTelegramAlert(`🚨 Critical motor failure detected! Motor stopped automatically. Reasons: ${emergencyReasons.join(', ') || 'Sensor spike'}`);
     } else if (analysis.status === 'FAILURE_LIKELY' && shouldSendAlert('FAILURE_LIKELY')) {
       await sendTelegramAlert(`⚠️ Failure likely within ${analysis.failureEtaMinutes ?? 'N/A'} minutes. ${analysis.failureEtaLabel}`);
+    } else if (tempRising && shouldSendAlert('TEMP_RISING')) {
+      await sendTelegramAlert(`⚠️ ${analysis.failureEtaLabel}`);
     } else if (analysis.status === 'WARNING' && shouldSendAlert('WARNING')) {
       await sendTelegramAlert(`⚠️ Early warning: system trends degrading. ${analysis.failureEtaLabel}`);
     }
@@ -562,6 +616,6 @@ app.get('/favicon.ico', (req, res) => {
 });
 
 // ===== Start Server =====
-app.listen(5000, "0.0.0.0", () => {
-  console.log("Server running on port 5000 (0.0.0.0)");
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT} (0.0.0.0)`);
 });

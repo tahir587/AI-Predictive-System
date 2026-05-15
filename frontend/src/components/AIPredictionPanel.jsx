@@ -58,6 +58,41 @@ export default function AIPredictionPanel({ analysis, isLive }) {
   const confidence = analysis?.confidence != null ? analysis.confidence * 100 : null
   const emergencyActive = analysis?.emergency?.active
   const actionLabel = analysis?.action === 'STOP_MOTOR' ? 'SHUTDOWN' : 'RUNNING'
+  const tempMetrics = analysis?.metrics?.temperature
+  const showTempEtaLabel = tempMetrics
+    && Number.isFinite(tempMetrics.latest)
+    && tempMetrics.latest >= 32
+    && Number.isFinite(tempMetrics.slopePerMin)
+    && tempMetrics.slopePerMin > 0
+    && Number.isFinite(analysis?.failureEtaMinutes)
+  const showRemainingLife = showTempEtaLabel
+  let displayEtaMinutes = analysis?.failureEtaMinutes
+  if (showRemainingLife && Number.isFinite(displayEtaMinutes)) {
+    const temp = tempMetrics.latest
+    const slope = tempMetrics.slopePerMin
+    let range = null
+
+    if (temp >= 45) {
+      range = { minTemp: 45, maxTemp: 50, minEta: 5, maxEta: 10 }
+    } else if (temp >= 40) {
+      range = { minTemp: 40, maxTemp: 45, minEta: 10, maxEta: 50 }
+    } else if (temp >= 35) {
+      range = { minTemp: 35, maxTemp: 40, minEta: 50, maxEta: 100 }
+    } else if (temp >= 32) {
+      range = { minTemp: 32, maxTemp: 35, minEta: 100, maxEta: 200 }
+    }
+
+    if (range) {
+      const tempRatio = Math.min(Math.max((temp - range.minTemp) / Math.max(range.maxTemp - range.minTemp, 1), 0), 1)
+      const slopeRatio = Math.min(Math.max(slope / 2, 0), 1)
+      let eta = range.maxEta - ((range.maxEta - range.minEta) * tempRatio)
+      eta -= (range.maxEta - range.minEta) * 0.2 * slopeRatio
+      displayEtaMinutes = Math.round(Math.min(Math.max(eta, range.minEta), range.maxEta))
+    }
+  }
+  const etaLabel = showTempEtaLabel && Number.isFinite(displayEtaMinutes)
+    ? `Estimated to reach danger in ${displayEtaMinutes} min`
+    : null
   const trendArrow = analysis?.trendSummary === 'RISING'
     ? '↗'
     : analysis?.trendSummary === 'FALLING'
@@ -81,7 +116,9 @@ export default function AIPredictionPanel({ analysis, isLive }) {
             <p className="text-xs uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>AI Prediction</p>
             <h3 className="text-lg md:text-xl font-semibold" style={{ color: cfg.color }}>{cfg.label}</h3>
             <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {analysis?.failureEtaLabel || (isLive ? 'Analyzing sensor trends' : 'Waiting for live data')}
+              {showTempEtaLabel
+                ? (etaLabel || analysis?.failureEtaLabel)
+                : (isLive ? 'Monitoring system' : 'Waiting for live data')}
             </p>
           </div>
         </div>
@@ -104,7 +141,7 @@ export default function AIPredictionPanel({ analysis, isLive }) {
         </div>
         <div className="ai-metric">
           <span className="ai-label">Remaining Useful Life</span>
-          <span className="ai-value">{analysis?.failureEtaMinutes != null ? `${analysis.failureEtaMinutes} min` : 'Monitoring'}</span>
+          <span className="ai-value">{showRemainingLife ? `${displayEtaMinutes} min` : 'Monitoring'}</span>
         </div>
         <div className="ai-metric">
           <span className="ai-label">Action</span>
@@ -129,7 +166,9 @@ export default function AIPredictionPanel({ analysis, isLive }) {
       <div className="ai-reasoning mt-5">
         <p className="ai-reasoning-title">AI Reasoning</p>
         <ul className="ai-reasoning-list">
-          {(analysis?.reasoning?.length ? analysis.reasoning : ['Awaiting enough history for reasoning']).map((item, idx) => (
+          {(analysis?.reasoning?.length
+            ? analysis.reasoning.filter(item => !item.startsWith('Estimated RUL'))
+            : ['Awaiting enough history for reasoning']).map((item, idx) => (
             <li key={`${item}-${idx}`}>{item}</li>
           ))}
         </ul>

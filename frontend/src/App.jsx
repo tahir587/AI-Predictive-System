@@ -37,6 +37,7 @@ function App() {
   const lastAiStatusRef = useRef(null)
   const lastAlertsRef = useRef('')
   const lastActionRef = useRef(null)
+  const lastEtaRef = useRef(null)
 
   const addLog = useCallback((message, type = 'info') => {
     const entry = {
@@ -134,6 +135,21 @@ function App() {
         addLog('Emergency shutdown activated: motor stopped', 'danger')
       } else {
         addLog('System action: motor running', 'info')
+      }
+    }
+
+    const tempMetrics = analysis.metrics?.temperature
+    const showTempEtaLabel = tempMetrics
+      && Number.isFinite(tempMetrics.latest)
+      && tempMetrics.latest >= 32
+      && Number.isFinite(tempMetrics.slopePerMin)
+      && tempMetrics.slopePerMin > 0
+      && Number.isFinite(analysis.failureEtaMinutes)
+    if (showTempEtaLabel) {
+      const etaSignature = `${analysis.failureEtaMinutes}-${tempMetrics.latest.toFixed(1)}`
+      if (etaSignature !== lastEtaRef.current) {
+        lastEtaRef.current = etaSignature
+        addLog(`Estimated time to failure: ${analysis.failureEtaMinutes} minutes`, 'warning')
       }
     }
   }, [sensorData?.analysis, addLog])
